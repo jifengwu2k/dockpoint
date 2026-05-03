@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Jifeng Wu
+# Licensed under the MIT License. See LICENSE file in the project root for full license information.
 """Cross-platform primitives for the auto-spawning client-daemon pattern.
 
 Provides a canonical, well-known communication point that only one process
@@ -27,6 +29,7 @@ from __future__ import unicode_literals
 import errno
 import os
 from typing import FrozenSet, List, Optional, Text, Tuple
+from posix_or_nt import posix_or_nt
 
 
 DEFAULT_INSTANCE = "default"  # type: Text
@@ -112,7 +115,7 @@ def validate_path_component(path_component):
 # ---------------------------------------------------------------------------
 # Windows: named pipes
 # ---------------------------------------------------------------------------
-if os.name == "nt":
+if posix_or_nt() == "nt":
     import ctypes
     from ctypes import wintypes
 
@@ -446,6 +449,15 @@ else:
     _lockf = _libc.lockf
     _lockf.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_long]  # type: List[object]
     _lockf.restype = ctypes.c_int
+    _close = _libc.close
+    _close.argtypes = [ctypes.c_int]  # type: List[object]
+    _close.restype = ctypes.c_int
+    _lseek = _libc.lseek
+    _lseek.argtypes = [ctypes.c_int, ctypes.c_long, ctypes.c_int]  # type: List[object]
+    _lseek.restype = ctypes.c_long
+    _open = _libc.open
+    _open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]  # type: List[object]
+    _open.restype = ctypes.c_int
 
     _DEFAULT_POSIX_RUNTIME_ROOT = "/tmp"  # type: Text
     _F_ULOCK = 0
@@ -507,7 +519,7 @@ else:
                 finally:
                     if lock_fd is not None:
                         _do_unlock_file(lock_fd)
-                        os.close(lock_fd)
+                        _do_close(lock_fd)
 
     def _strerror_text(error):
         # type: (int) -> Text
@@ -539,6 +551,33 @@ else:
         if error == errno.EEXIST and os.path.isdir(path):
             return
         raise OSError(error, "mkdir failed: %s" % _strerror_text(error))
+
+    def _do_close(fd):
+        # type: (int) -> None
+        ctypes.set_errno(0)
+        result = _close(fd)
+        if result != -1:
+            return
+        error = ctypes.get_errno()
+        raise OSError(error, "close failed: %s" % _strerror_text(error))
+
+    def _do_lseek(fd, offset, whence):
+        # type: (int, int, int) -> int
+        ctypes.set_errno(0)
+        result = _lseek(fd, offset, whence)
+        if result == -1:
+            error = ctypes.get_errno()
+            raise OSError(error, "lseek failed: %s" % _strerror_text(error))
+        return result
+
+    def _do_open(path, flags, mode=0):
+        # type: (Text, int, int) -> int
+        ctypes.set_errno(0)
+        result = _open(path.encode(), flags, mode)
+        if result == -1:
+            error = ctypes.get_errno()
+            raise OSError(error, "open failed: %s" % _strerror_text(error))
+        return result
 
     def _canonical_posix_runtime_dir(app_name, root=_DEFAULT_POSIX_RUNTIME_ROOT):
         # type: (Text, Text) -> Text
@@ -595,14 +634,14 @@ else:
         lock_path = _sidecar_lock_path(identifier)
         _ensure_parent_dir(identifier)
 
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        lock_fd = _do_open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             _do_chmod(lock_path, 0o600)
             try:
                 _do_lock_file_nonblocking(lock_fd)
             except OSError as exc:
                 if exc.errno in {errno.EACCES, errno.EAGAIN}:
-                    os.close(lock_fd)
+                    _do_close(lock_fd)
                     return None
                 raise
 
@@ -611,7 +650,7 @@ else:
             if probe is not None:
                 probe.close()
                 _do_unlock_file(lock_fd)
-                os.close(lock_fd)
+                _do_close(lock_fd)
                 return None
 
             _do_unlink(identifier)
@@ -634,7 +673,7 @@ else:
             try:
                 _do_unlock_file(lock_fd)
             finally:
-                os.close(lock_fd)
+                _do_close(lock_fd)
             raise
 
     def connect(app_name, instance=DEFAULT_INSTANCE):
@@ -653,7 +692,7 @@ else:
 
     def _do_lock_file_nonblocking(fd):
         # type: (int) -> None
-        os.lseek(fd, 0, os.SEEK_SET)
+        _do_lseek(fd, 0, os.SEEK_SET)
         ctypes.set_errno(0)
         result = _lockf(fd, _F_TLOCK, 0)
         if result == 0:
@@ -663,7 +702,7 @@ else:
 
     def _do_unlock_file(fd):
         # type: (int) -> None
-        os.lseek(fd, 0, os.SEEK_SET)
+        _do_lseek(fd, 0, os.SEEK_SET)
         ctypes.set_errno(0)
         result = _lockf(fd, _F_ULOCK, 0)
         if result == 0:

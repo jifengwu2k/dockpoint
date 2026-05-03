@@ -106,3 +106,11 @@ conn.close()
 A dock is a fixed, well-known place. A dockpoint is the specific spot on
 that dock where you tie up. One process *claims the dockpoint* and holds
 it. Others *arrive at the dockpoint* to communicate.
+
+## Contributing
+
+Contributions are welcome! Please submit pull requests or open issues on the GitHub repository.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
